@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ORBITAL REBOUND</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            /* Disables double-tap zoom and scrolling */
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #080810;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #00ffcc;
+        }
+
+        #canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle, #0f1026 0%, #05050d 100%);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: calc(15px + env(safe-area-inset-top)) calc(15px + env(safe-area-inset-right)) calc(15px + env(safe-area-inset-bottom)) calc(15px + env(safe-area-inset-left));
+        }
+
+        .hud-element {
+            font-size: 0.9rem;
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+        }
+
+        #top-hud {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            align-items: center;
+        }
+
+        #shield-bar-container {
+            width: 120px;
+            height: 10px;
+            border: 2px solid #ff0055;
+            padding: 1px;
+            margin-top: 3px;
+            box-shadow: 0 0 10px rgba(255, 0, 85, 0.3);
+        }
+
+        #shield-bar {
+            width: 100%;
+            height: 100%;
+            background-color: #ff0055;
+            transition: width 0.1s ease;
+            box-shadow: 0 0 8px #ff0055;
+        }
+
+        #screen-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(5, 5, 13, 0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .btn {
+            background: #00ffcc;
+            border: none;
+            color: #05050d;
+            padding: 16px 32px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            margin-top: 30px;
+            text-transform: uppercase;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
+            pointer-events: auto;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            margin: 0 0 15px 0;
+            letter-spacing: 3px;
+            text-shadow: 0 0 20px #00ffcc;
+        }
+
+        p {
+            color: #8899a6;
+            max-width: 400px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            margin: 0;
+        }
+
+        .highlight {
+            color: #ff0055;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="ui-layer">
+        <div id="top-hud">
+            <div>
+                <div class="hud-element" id="score-display">SCORE: 00000</div>
+                <div class="hud-element" id="multiplier-display" style="color: #ffb700;">MULT: x1</div>
+            </div>
+            <div>
+                <div class="hud-element" style="color: #ff0055; text-align: right;">SHIELD</div>
+                <div id="shield-bar-container">
+                    <div id="shield-bar"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="screen-overlay">
+        <h1 id="title">ORBITAL REBOUND</h1>
+        <p id="description">
+            Hazards drift toward your core.<br><br>
+            <span class="highlight">TOUCH & HOLD</span> to cast a magnetic tether.<br>
+            <span class="highlight">DRAG & RELEASE</span> to sling masses into each other to smash them.
+        </p>
+        <button class="btn" id="start-btn">Initialize</button>
+    </div>
+
+    <script>
+        // --- MOBILE-READY AUDIO ENGINE ---
+        const AudioEngine = {
+            ctx: null,
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                // Resume logic for strict mobile browser security policies
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            },
+            playTether() {
+                if (!this.ctx) return;
+                let osc = this.ctx.createOscillator();
+                let gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(500, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(150, this.ctx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.12);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.12);
+            },
+            playRelease() {
+                if (!this.ctx) return;
+                let osc = this.ctx.createOscillator();
+                let gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(200, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(450, this.ctx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            },
+            playExplosion(isBig = false) {
+                if (!this.ctx) return;
+                let duration = isBig ? 0.4 : 0.2;
+                let bufferSize = this.ctx.sampleRate * duration;
+                let buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                let data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                let noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+                let filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(isBig ? 250 : 450, this.ctx.currentTime);
+                let gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(isBig ? 0.25 : 0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+                noise.start();
+                noise.stop(this.ctx.currentTime + duration);
+            },
+            playDamage() {
+                if (!this.ctx) return;
+                let osc = this.ctx.createOscillator();
+                let gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(30, this.ctx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.2);
+            }
+        };
+
+        // --- SYSTEM ENGINE INITIALIZATION ---
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // High-DPI Mobile Display Normalization
+        let dpr = window.devicePixelRatio || 1;
+        function resizeCanvas() {
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            ctx.scale(dpr, dpr);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let state = {
+            score: 0,
+            multiplier: 1,
+            multTimer: 0,
+            shields: 100,
+            running: false,
+            screenShake: 0,
+            spawnTimer: 0,
+            spawnRate: 100,
+        };
+
+        const core = { x: 0, y: 0, radius: 28, pulse: 0 };
+        let pointer = { x: 0, y: 0, active: false };
+        let tetheredEntity = null;
+        let entities = [];
+        let particles = [];
+
+        // Scale factors dynamically derived from viewport sizes to fit phones
+        function getBaseSpeedFactor() {
+            return Math.min(window.innerWidth, window.innerHeight) * 0.003;
+        }
+
+        // --- DEBRIS MODEL ARCHITECTURE ---
+        class Debris {
+            constructor(x, y, type = 'standard') {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+
+                let speedScale = getBaseSpeedFactor();
+                this.vx = (window.innerWidth / 2 - x) * (0.002 * speedScale) + (Math.random() - 0.5) * 1.2;
+                this.vy = (window.innerHeight / 2 - y) * (0.002 * speedScale) + (Math.random() - 0.5) * 1.2;
+
+                if (type === 'heavy') {
+                    this.radius = 18;
+                    this.mass = 4;
+                    this.color = '#bf00ff';
+                    this.scoreValue = 25;
+                } else if (type === 'volatile') {
+                    this.radius = 10;
+                    this.mass = 1;
+                    this.color = '#ffb700';
+                    this.scoreValue = 40;
+                } else {
+                    this.radius = 14;
+                    this.mass = 2;
+                    this.color = '#00ffcc';
+                    this.scoreValue = 10;
+                }
+                this.trail = [];
+                this.maxTrail = 5; // Reduced optimized footprint for mobile GPUs
+            }
+
+            update() {
+                this.trail.push({ x: this.x, y: this.y });
+                if (this.trail.length > this.maxTrail) this.trail.shift();
+
+                if (tetheredEntity === this) {
+                    let dx = pointer.x - this.x;
+                    let dy = pointer.y - this.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    let springForce = 0.12; // Snappier response curves on touch screens
+                    this.vx += (dx / dist) * dist * springForce / this.mass;
+                    this.vy += (dy / dist) * dist * springForce / this.mass;
+
+                    this.vx *= 0.93;
+                    this.vy *= 0.93;
+                } else {
+                    let dx = (window.innerWidth / 2) - this.x;
+                    let dy = (window.innerHeight / 2) - this.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    let gravityG = 0.06;
+                    this.vx += (dx / dist) * gravityG;
+                    this.vy += (dy / dist) * gravityG;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+
+            draw() {
+                if (this.trail.length > 1) {
+                    ctx.beginPath();
+                    ctx.moveTo(this.trail[0].x, this.trail[0].y);
+                    for (let i = 1; i < this.trail.length; i++) {
+                        ctx.lineTo(this.trail[i].x, this.trail[i].y);
+                    }
+                    ctx.strokeStyle = this.color + '15';
+                    ctx.lineWidth = this.radius * 1.5;
+                    ctx.stroke();
+                }
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 2.5;
+                ctx.fillStyle = '#05050d';
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.35, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.radius = Math.random() * 2.5 + 1;
+                this.color = color;
+                this.alpha = 1;
+                this.decay = Math.random() * 0.04 + 0.02;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= this.decay;
+            }
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function createExplosion(x, y, color, count = 10) {
+            for (let i = 0; i < count; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        // --- ATOMIC COLLISION RESOLUTION ---
+        function checkCollisions() {
+            let entitiesToRemove = new Set();
+            let currentCoreX = window.innerWidth / 2;
+            let currentCoreY = window.innerHeight / 2;
+
+            for (let i = entities.length - 1; i >= 0; i--) {
+                let ent = entities[i];
+                let dx = ent.x - currentCoreX;
+                let dy = ent.y - currentCoreY;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < ent.radius + core.radius) {
+                    if (tetheredEntity === ent) tetheredEntity = null;
+
+                    state.shields -= ent.type === 'heavy' ? 25 : 15;
+                    state.screenShake = 12;
+                    state.multiplier = 1;
+                    updateHUD();
+
+                    AudioEngine.playDamage();
+                    createExplosion(ent.x, ent.y, '#ff0055', 15);
+                    entitiesToRemove.add(ent);
+
+                    if (state.shields <= 0) gameOver();
+                    continue;
+                }
+
+                for (let j = i - 1; j >= 0; j--) {
+                    let other = entities[j];
+                    if (entitiesToRemove.has(ent) || entitiesToRemove.has(other)) continue;
+
+                    let edx = other.x - ent.x;
+                    let edy = other.y - ent.y;
+                    let edist = Math.sqrt(edx * edx + edy * edy);
+
+                    if (edist < ent.radius + other.radius) {
+                        let kx = ent.vx - other.vx;
+                        let ky = ent.vy - other.vy;
+                        let relativeSpeed = Math.sqrt(kx * kx + ky * ky);
+
+                        if (relativeSpeed > 2.2) {
+                            AudioEngine.playExplosion(ent.type === 'heavy' || other.type === 'heavy');
+                            createExplosion((ent.x + other.x) / 2, (ent.y + other.y) / 2, ent.color, 10);
+                            createExplosion((ent.x + other.x) / 2, (ent.y + other.y) / 2, other.color, 10);
+
+                            let baseReward = ent.scoreValue + other.scoreValue;
+                            state.score += baseReward * state.multiplier;
+                            state.multTimer = 180;
+                            state.multiplier++;
+                            state.screenShake = relativeSpeed * 1.2;
+                            updateHUD();
+
+                            entitiesToRemove.add(ent);
+                            entitiesToRemove.add(other);
+
+                            if (tetheredEntity === ent || tetheredEntity === other) tetheredEntity = null;
+                        } else {
+                            let nx = edx / edist;
+                            let ny = edy / edist;
+                            let p = 2 * (ent.vx * nx + ent.vy * ny - other.vx * nx - other.vy * ny) / (ent.mass + other.mass);
+                            ent.vx -= p * other.mass * nx;
+                            ent.vy -= p * other.mass * ny;
+                            other.vx += p * ent.mass * nx;
+                            other.vy += p * ent.mass * ny;
+                        }
+                    }
+                }
+            }
+
+            if (entitiesToRemove.size > 0) {
+                entities = entities.filter(ent => !entitiesToRemove.has(ent));
+            }
+        }
+
+        // --- INTERACTION & TOUCH POSITION OVERLAY LAYER ---
+        function handleInputStart(clientX, clientY) {
+            if (!state.running) return;
+            AudioEngine.init();
+
+            // COGNITIVE OFFSET DESIGN: Shift interaction target slightly north of real touch point
+            // so player fingers don't obstruct object visibility
+            pointer.x = clientX;
+            pointer.y = clientY - 35;
+            pointer.active = true;
+
+            let target = null;
+            let closestDist = 160; // Clean touch boundary footprint radius
+
+            for (let ent of entities) {
+                let dx = ent.x - pointer.x;
+                let dy = ent.y - pointer.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    target = ent;
+                }
+            }
+
+            if (target) {
+                tetheredEntity = target;
+                AudioEngine.playTether();
+            }
+        }
+
+        function handleInputMove(clientX, clientY) {
+            if (!pointer.active) return;
+            pointer.x = clientX;
+            pointer.y = clientY - 35;
+        }
+
+        function handleInputEnd() {
+            if (tetheredEntity) {
+                AudioEngine.playRelease();
+                tetheredEntity = null;
+            }
+            pointer.active = false;
+        }
+
+        // Mouse Triggers
+        window.addEventListener('mousedown', (e) => handleInputStart(e.clientX, e.clientY));
+        window.addEventListener('mousemove', (e) => handleInputMove(e.clientX, e.clientY));
+        window.addEventListener('mouseup', handleInputEnd);
+
+        // Native Touch Screens Interface Event Listeners
+        window.addEventListener('touchstart', (e) => {
+            if (e.touches.length > 0) handleInputStart(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) handleInputMove(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+        window.addEventListener('touchend', handleInputEnd);
+
+        // --- LOOP CONFIGURATIONS ---
+        function spawnWave() {
+            state.spawnTimer++;
+            if (state.spawnTimer >= state.spawnRate) {
+                state.spawnTimer = 0;
+                if (state.spawnRate > 40) state.spawnRate -= 1;
+
+                let x, y;
+                let margin = 40;
+                if (Math.random() > 0.5) {
+                    x = Math.random() > 0.5 ? -margin : window.innerWidth + margin;
+                    y = Math.random() * window.innerHeight;
+                } else {
+                    x = Math.random() * window.innerWidth;
+                    y = Math.random() > 0.5 ? -margin : window.innerHeight + margin;
+                }
+
+                let roll = Math.random();
+                let type = 'standard';
+                if (roll > 0.88) type = 'volatile';
+                else if (roll > 0.68) type = 'heavy';
+
+                entities.push(new Debris(x, y, type));
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score-display').innerText = `SCORE: ${String(state.score).padStart(5, '0')}`;
+            document.getElementById('multiplier-display').innerText = `MULT: x${state.multiplier}`;
+            document.getElementById('shield-bar').style.width = `${Math.max(0, state.shields)}%`;
+        }
+
+        function gameOver() {
+            state.running = false;
+            document.getElementById('title').innerText = "GRID COLLAPSED";
+            document.getElementById('description').innerHTML = `Final Score Scoreboard matrix:<br><span class="highlight" style="font-size:1.6rem">${state.score}</span>`;
+            document.getElementById('start-btn').innerText = "Try Again";
+            document.getElementById('screen-overlay').style.display = 'flex';
+            setTimeout(() => { document.getElementById('screen-overlay').style.opacity = '1'; }, 10);
+        }
+
+        document.getElementById('start-btn').addEventListener('click', (e) => {
+            e.stopPropagation(); // Avoid triggering dynamic input triggers
+            AudioEngine.init();
+            state.score = 0;
+            state.multiplier = 1;
+            state.shields = 100;
+            state.spawnRate = 100;
+            state.spawnTimer = 0;
+            entities = [];
+            particles = [];
+            tetheredEntity = null;
+            updateHUD();
+
+            document.getElementById('screen-overlay').style.opacity = '0';
+            setTimeout(() => { document.getElementById('screen-overlay').style.display = 'none'; }, 300);
+            state.running = true;
+        });
+
+        // --- ANIMATION CORE RENDER LOOP ---
+        function tick() {
+            ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+            let currentCoreX = window.innerWidth / 2;
+            let currentCoreY = window.innerHeight / 2;
+            core.pulse += 0.06;
+
+            ctx.save();
+            if (state.screenShake > 0) {
+                let dx = (Math.random() - 0.5) * state.screenShake;
+                let dy = (Math.random() - 0.5) * state.screenShake;
+                ctx.translate(dx, dy);
+                state.screenShake *= 0.88;
+                if (state.screenShake < 0.1) state.screenShake = 0;
+            }
+
+            if (state.running) {
+                spawnWave();
+                checkCollisions();
+
+                if (state.multiplier > 1) {
+                    state.multTimer--;
+                    if (state.multTimer <= 0) {
+                        state.multiplier = 1;
+                        updateHUD();
+                    }
+                }
+            }
+
+            // Central Core Render
+            let pulseRadius = core.radius + Math.sin(core.pulse) * 3;
+            let coreGlow = ctx.createRadialGradient(currentCoreX, currentCoreY, 3, currentCoreX, currentCoreY, pulseRadius + 15);
+            coreGlow.addColorStop(0, '#00ffcc');
+            coreGlow.addColorStop(0.3, 'rgba(0, 255, 204, 0.15)');
+            coreGlow.addColorStop(1, 'transparent');
+
+            ctx.beginPath();
+            ctx.arc(currentCoreX, currentCoreY, pulseRadius + 15, 0, Math.PI * 2);
+            ctx.fillStyle = coreGlow;
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(currentCoreX, currentCoreY, core.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = '#ff0055';
+            ctx.lineWidth = 3;
+            ctx.fillStyle = '#0a0a14';
+            ctx.fill();
+            ctx.stroke();
+
+            // Tether Vector Render
+            if (pointer.active && tetheredEntity) {
+                ctx.beginPath();
+                ctx.moveTo(pointer.x, pointer.y);
+                ctx.lineTo(tetheredEntity.x, tetheredEntity.y);
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Target touch indicator ring
+                ctx.beginPath();
+                ctx.arc(pointer.x, pointer.y, 10, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.stroke();
+            }
+
+            // Entities Loop
+            for (let ent of entities) {
+                if (state.running) ent.update();
+                ent.draw();
+            }
+
+            // Particle Loop
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.update();
+                p.draw();
+                if (p.alpha <= 0) particles.splice(i, 1);
+            }
+
+            ctx.restore();
+            requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+    </script>
+</body>
+
+</html>
